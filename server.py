@@ -4,8 +4,7 @@ from typing import Dict, Any, List
 from email.mime.text import MIMEText
 from email.utils import formataddr
 
-mcp = FastMCP("Email MCP Server")
-
+mcp = FastMCP("Email Client", version = "0.1.0")
 class EmailClient:
     def __init__(self):
         self.username = os.environ.get("MAIL_USER_NAME", "")
@@ -261,7 +260,7 @@ def reply_email(
         return {"success": False, "message": str(e)}
 
 def main():
-    mcp.run()
+    mcp.run(show_banner=False)
 
 if __name__ == "__main__":
     main()
