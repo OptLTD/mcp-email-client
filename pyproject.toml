@@ -1,0 +1,18 @@
+[project]
+name = "mcp-email-client"
+version = "0.1.0"
+description = "MCP EMail Client allows users to send emails, and receive emails."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+ "fastmcp>=2.10.5",
+]
+[[project.authors]]
+name = "0xFFLR"
+email = "chnwine@qq.com"
+
+[project.scripts]
+mcp-email-client = "server:main"
+
+[tool.setuptools]
+py-modules = ["server"]
