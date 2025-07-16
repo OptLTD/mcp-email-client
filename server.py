@@ -260,5 +260,8 @@ def reply_email(
     except Exception as e:
         return {"success": False, "message": str(e)}
 
-if __name__ == "__main__":
+def main():
     mcp.run()
+
+if __name__ == "__main__":
+    main()
