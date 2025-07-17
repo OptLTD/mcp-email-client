@@ -1,7 +1,7 @@
 [project]
 name = "mcp-email-client"
-version = "0.1.4"
-description = "A Model Context Protocol (MCP) server for sending and receiving emails, supporting IMAP/SMTP, with display name, reply, and robust error handling."
+version = "0.1.5"
+description = "A Model Context Protocol (MCP) server for sending and receiving emails, supporting IMAP/SMTP, with display name, reply, robust error handling, and full attachment support."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
