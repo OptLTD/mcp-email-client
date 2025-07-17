@@ -3,6 +3,8 @@ from fastmcp import FastMCP
 from typing import Dict, Any, List
 from email.mime.text import MIMEText
 from email.utils import formataddr
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 
 mcp = FastMCP("Email Client", version = "0.1.0")
 class EmailClient:
@@ -86,23 +88,35 @@ def send_email(
     to: str,
     subject: str,
     content: str,
+    attachments: List[str] = None
 ) -> Dict[str, Any]:
     """
-    Send an email with optional display name support.
+    Send an email with optional attachments.
     Args:
         to: Recipient email address
         subject: Email subject
         content: Email body (plain text)
+        attachments: List of absolute file paths to attach
     Returns:
         Dict with success status and message
     """
     try:
         client = EmailClient()
         server = client.get_smtp_server()
-        msg = MIMEText(content, 'plain', 'utf-8')
+        msg = MIMEMultipart()
         msg['To'] = formataddr((to, to))
         msg['From'] = formataddr((client.from_name, client.from_addr))
         msg['Subject'] = subject
+        msg.attach(MIMEText(content, 'plain', 'utf-8'))
+        # Attach files
+        if attachments:
+            for file_path in attachments:
+                if not os.path.isfile(file_path):
+                    continue
+                with open(file_path, 'rb') as f:
+                    part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+                    part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+                    msg.attach(part)
         server.sendmail(client.username, [to], msg.as_string())
         server.quit()
         return {"success": True, "message": "Email sent successfully"}
@@ -310,13 +324,15 @@ def reply_email(
     uid: str,
     subject: str,
     content: str,
+    attachments: List[str] = None
 ) -> Dict[str, Any]:
     """
-    Reply to an email, automatically setting reply headers and supporting display name.
+    Reply to an email, automatically setting reply headers and supporting attachments.
     Args:
         uid: UID of the original email to reply to
         subject: Email subject
         content: Email body (plain text or HTML, auto-detected)
+        attachments: List of absolute file paths to attach
     Returns:
         Dict with success status and message
     """
@@ -328,29 +344,40 @@ def reply_email(
         if not msg_data or not msg_data[0] or not isinstance(msg_data[0], tuple) or not msg_data[0][1]:
             mail.logout()
             return {"success": False, "message": "Original email content is empty"}
-        msg = email.message_from_bytes(msg_data[0][1])
-        original_from = client.decode_header_field(msg, 'From')
-        original_subject = client.decode_header_field(msg, 'Subject')
-        original_message_id = client.decode_header_field(msg, 'Message-ID')
+        msg_orig = email.message_from_bytes(msg_data[0][1])
+        original_from = client.decode_header_field(msg_orig, 'From')
+        original_subject = client.decode_header_field(msg_orig, 'Subject')
+        original_message_id = client.decode_header_field(msg_orig, 'Message-ID')
         mail.logout()
         html_signs = ['<html', '<body', '</p>', '<div', '<span',
                       '<br', '<table', '<tr', '<td', '<!DOCTYPE html']
         is_html = any(sign in content.lower() for sign in html_signs)
         server = client.get_smtp_server()
-        reply = MIMEText(content, "html" if is_html else "plain", "utf-8")
-        reply["From"] = formataddr((client.from_name, client.from_addr))
-        reply["To"] = original_from
-        reply["Subject"] = subject
+        msg = MIMEMultipart()
+        msg['From'] = formataddr((client.from_name, client.from_addr))
+        msg['To'] = original_from
+        msg['Subject'] = subject
         if original_message_id:
-            reply["In-Reply-To"] = original_message_id
-            reply["References"] = original_message_id
+            msg['In-Reply-To'] = original_message_id
+            msg['References'] = original_message_id
         if original_from:
-            reply["Reply-To"] = original_from
+            msg['Reply-To'] = original_from
         if original_subject:
-            reply["Thread-Topic"] = original_subject
+            msg['Thread-Topic'] = original_subject
         if is_html:
-            reply["Content-Type"] = "text/html; charset=UTF-8"
-        server.sendmail(client.username, [original_from], reply.as_string())
+            msg.attach(MIMEText(content, 'html', 'utf-8'))
+        else:
+            msg.attach(MIMEText(content, 'plain', 'utf-8'))
+        # Attach files
+        if attachments:
+            for file_path in attachments:
+                if not os.path.isfile(file_path):
+                    continue
+                with open(file_path, 'rb') as f:
+                    part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+                    part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+                    msg.attach(part)
+        server.sendmail(client.username, [original_from], msg.as_string())
         server.quit()
         return {"success": True, "message": "Reply email sent successfully"}
     except Exception as e:
