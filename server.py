@@ -11,6 +11,7 @@ class EmailClient:
         self.password = os.environ.get("MAIL_PASS_WORD", "")
         self.smtp_addr = os.environ.get("MAIL_SMTP_ADDR", "")
         self.imap_addr = os.environ.get("MAIL_IMAP_ADDR", "")
+        self.save_path = os.environ.get("MAIL_SAVE_PATH", "")
         self.from_addr = os.environ.get("MAIL_FROM_ADDR", self.username)
         self.from_name = os.environ.get("MAIL_FROM_NAME", self.username)
 
@@ -64,6 +65,22 @@ class EmailClient:
             for v, enc in parts
         ])
 
+    def save_attachments(self, msg, uid):
+        import os
+        attachments = []
+        if msg.is_multipart():
+            for part in msg.walk():
+                filename = part.get_filename()
+                if filename:
+                    attachments.append(filename)
+                if filename and self.save_path:
+                    attach_dir = os.path.join(self.save_path, uid)
+                    os.makedirs(attach_dir, exist_ok=True)
+                    file_path = os.path.join(attach_dir, filename)
+                    with open(file_path, "wb") as f:
+                        f.write(part.get_payload(decode=True))
+        return attachments
+
 @mcp.tool()
 def send_email(
     to: str,
@@ -93,15 +110,17 @@ def send_email(
         return {"success": False, "message": str(e)}
 
 @mcp.tool()
-def list_emails(
-    limit: int = 10
+def list_inbox(
+    limit: int = 10,
+    start: int = 0
 ) -> Dict[str, Any]:
     """
     List emails in the inbox with brief information.
     Args:
         limit: Maximum number of emails to return
+        start: Start index (0-based, from the latest email)
     Returns:
-        Dict with a list of emails (uid, subject, snippet, date, seen)
+        Dict with a list of emails (uid, subject, snippet, date, seen, attachment)
     """
     emails: List[Dict[str, str]] = []
     try:
@@ -109,22 +128,101 @@ def list_emails(
         mail = client.get_imap_server()
         mail.select('INBOX')
         typ, data = mail.search(None, 'ALL')
-        mail_ids = data[0].split()[-limit:]
+        mail_ids = data[0].split()
+        mail_ids = mail_ids[::-1][start:start+limit]
         for num in mail_ids:
             typ, msg_data = mail.fetch(num, '(RFC822 FLAGS UID)')
             msg = email.message_from_bytes(msg_data[0][1])
             subject = client.decode_header_field(msg, 'Subject')
             date_ = client.decode_header_field(msg, 'Date')
             snippet = ""
+            attachment = 0
             if msg.is_multipart():
                 for part in msg.walk():
                     if part.get_content_type() == "text/plain":
                         try:
-                            snippet = part.get_payload(decode=True).decode(part.get_content_charset() or 'utf-8', errors='ignore')
+                            charset = part.get_content_charset() or 'utf-8'
+                            snippet = part.get_payload(decode=True).decode(charset, errors='ignore')
                             snippet = snippet.strip().replace('\r', '').replace('\n', ' ')
-                            break
                         except Exception:
                             continue
+                    if part.get_filename():
+                        attachment += 1
+            else:
+                try:
+                    charset = part.get_content_charset() or 'utf-8'
+                    snippet = msg.get_payload(decode=True).decode(charset, errors='ignore')
+                    snippet = snippet.strip().replace('\r', '').replace('\n', ' ')
+                except Exception:
+                    snippet = ""
+            snippet = snippet[:120]
+            typ, flag_data = mail.fetch(num, '(FLAGS)')
+            seen = b'\\Seen' in flag_data[0] if flag_data and flag_data[0] else False
+            typ, uid_data = mail.fetch(num, '(UID)')
+            import re
+            uid_match = re.search(br'UID (\d+)', uid_data[0])
+            uid = uid_match.group(1).decode() if uid_match else ""
+            emails.append({
+                "uid": uid, "subject": subject, "snippet": snippet,
+                "date": date_, "seen": seen, "attachment": attachment
+            })
+        mail.logout()
+        return {"emails": emails}
+    except Exception as e:
+        return {"emails": [], "error": str(e)}
+
+@mcp.tool()
+def list_sent(
+    limit: int = 10,
+    start: int = 0
+) -> Dict[str, Any]:
+    """
+    List emails in the sent mailbox with brief information.
+    Args:
+        limit: Maximum number of emails to return
+        start: Start index (0-based, from the latest email)
+    Returns:
+        Dict with a list of emails (uid, subject, snippet, date, seen, attachment)
+    """
+    emails: List[Dict[str, str]] = []
+    try:
+        client = EmailClient()
+        mail = client.get_imap_server()
+        sent_folders = ["Sent", "Sent Mail", "Sent Messages", "已发送", "已发送邮件"]
+        selected = False
+        for folder in sent_folders:
+            try:
+                typ, _ = mail.select(folder)
+                if typ == 'OK':
+                    selected = True
+                    break
+            except Exception:
+                continue
+        if not selected:
+            mail.logout()
+            return {"emails": [], "error": "No sent folder found"}
+        typ, data = mail.search(None, 'ALL')
+        mail_ids = data[0].split()
+        mail_ids = mail_ids[::-1][start:start+limit]
+        for num in mail_ids:
+            typ, msg_data = mail.fetch(num, '(RFC822 FLAGS UID)')
+            msg = email.message_from_bytes(msg_data[0][1])
+            subject = client.decode_header_field(msg, 'Subject')
+            date_ = client.decode_header_field(msg, 'Date')
+            snippet = ""
+            attachment = 0
+            if msg.is_multipart():
+                for part in msg.walk():
+                    filename = part.get_filename()
+                    content_disposition = part.get("Content-Disposition", "")
+                    if part.get_content_type() == "text/plain" and attachment == 0:
+                        try:
+                            snippet = part.get_payload(decode=True).decode(part.get_content_charset() or 'utf-8', errors='ignore')
+                            snippet = snippet.strip().replace('\r', '').replace('\n', ' ')
+                        except Exception:
+                            continue
+                    if filename:
+                        attachment += 1
             else:
                 try:
                     snippet = msg.get_payload(decode=True).decode(msg.get_content_charset() or 'utf-8', errors='ignore')
@@ -139,11 +237,8 @@ def list_emails(
             uid_match = re.search(br'UID (\d+)', uid_data[0])
             uid = uid_match.group(1).decode() if uid_match else ""
             emails.append({
-                "uid": uid,
-                "subject": subject,
-                "snippet": snippet,
-                "date": date_,
-                "seen": seen,
+                "uid": uid, "subject": subject, "snippet": snippet,
+                "date": date_, "seen": seen, "attachment": attachment
             })
         mail.logout()
         return {"emails": emails}
@@ -152,15 +247,16 @@ def list_emails(
 
 @mcp.tool()
 def read_email(
-    uid: str
+    uid: str,
 ) -> Dict[str, Any]:
     """
-    Read full details of an email by UID.
+    Read full details of an email by UID, and optionally save attachments.
     Args:
         uid: UID of the email
     Returns:
-        Dict with all email fields (uid, message_id, from, to, subject, date, seen, in_reply_to, references, snippet)
+        Dict with all email fields (uid, message_id, from, to, subject, date, seen, in_reply_to, references, snippet, attachments)
     """
+    import os
     try:
         client = EmailClient()
         mail = client.get_imap_server()
@@ -174,6 +270,8 @@ def read_email(
         seen = b'\\Seen' in flag_data[0] if flag_data and flag_data[0] else False
         uid_val = uid
         snippet = ""
+        attachments = client.save_attachments(msg, uid)
+        # 获取正文预览
         if msg.is_multipart():
             for part in msg.walk():
                 if part.get_content_type() == "text/plain":
@@ -197,10 +295,9 @@ def read_email(
             "to": client.decode_header_field(msg, 'To'),
             "subject": client.decode_header_field(msg, 'Subject'),
             "date": client.decode_header_field(msg, 'Date'),
-            "seen": seen,
             "in_reply_to": client.decode_header_field(msg, 'In-Reply-To'),
             "references": client.decode_header_field(msg, 'References'),
-            "snippet": snippet,
+            "seen": seen, "snippet": snippet, "attachments": attachments
         }
         mail.logout()
         return detail
